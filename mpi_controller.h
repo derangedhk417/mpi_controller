@@ -23,6 +23,7 @@
 #include <malloc.h>
 #include <fcntl.h>
 #include <string.h>
+#include <errno.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/mman.h>
@@ -60,12 +61,8 @@ struct MPIController {
 	                            // messages are received by the parent 
 	                            // before execution continues.
 
-	char * messageFDName;  // This memory is always shared between the parent
-	                       // and child process. Everytime a message is passed
-	                       // it is populated with the name that should be used
-	                       // to open a file descriptor that can be used with
-	                       // mmap to read the memory location that the message
-	                       // is at.
+	int fd;               
+
 	int  *  messageSize;   // This is populated with the size of the message 
 	                       // everytime a message is passed.
 	int  *  messageType;   // This is populated with the message type every
@@ -90,19 +87,54 @@ void * mallocShared(size_t size, char * name) {
 	// the same function with the same name argument.
 	int fd = shm_open(name, O_RDWR | O_CREAT, 0777);
 
+	if (fd == -1) {
+		printf("%d\n", errno);
+		printf("shm_open failed\n");
+	}
+
 	struct stat s;
 
-	fstat(fd, &s);
+	if (fstat(fd, &s) == -1) {
+		printf("fstat failed\n");
+	}
 
 	// If the size of the file descriptor doesn't match
 	// up, resize it.
 	if (s.st_size != size) {
 		// This ensures that the size of the memory and
 		// the size of the file descriptor match up.
-		ftruncate(fd, size);
+		if (ftruncate(fd, size) == -1) {
+			printf("ftruncate failed\n");
+		}
 	}
 
-	return mmap(NULL, size, protection, visibility, fd, 0);
+	void * result = mmap(NULL, size, protection, visibility, fd, 0);
+
+	if (result == (void *)-1) {
+		printf("mmap failed\n");
+	}
+
+	return result;
+}
+
+void * reallocShared(size_t size, int fd) {
+	if (ftruncate(fd, size) == -1) {
+		printf("ftruncate failed\n");
+	}
+
+	// readable and writeable.
+	int protection = PROT_READ | PROT_WRITE;
+
+	int visibility = MAP_SHARED;
+
+	void * result = mmap(NULL, size, protection, visibility, fd, 0);
+
+	if (result == (void *)-1) {
+		printf("mmap failed\n");
+		printf("errno: %d\n", errno);
+	}
+
+	return result;
 }
 
 // Constructs the name that should be used to identify
@@ -233,8 +265,7 @@ struct MPIController * createControllerInstance(char * name, char * MPIArguments
 
 
 	char * msgFDName = getMessageFDNameLocationFDName(name);
-	instance->messageFDName = mallocShared(sizeof(char) * 128, msgFDName);
-	memset(instance->messageFDName, 0, sizeof(char) * 128);
+	instance->fd = shm_open(msgFDName, O_RDWR | O_CREAT, 0777);
 	free(msgFDName);
 
 	char * msgSizeFD = getMessageSizeFDName(name);
@@ -338,7 +369,7 @@ struct MPIController * createChildInstance(char * name) {
 	// Now we map the shared memory.
 
 	char * msgFDName = getMessageFDNameLocationFDName(name);
-	instance->messageFDName = mallocShared(sizeof(char) * 128, msgFDName);
+	instance->fd = shm_open(msgFDName, O_RDWR | O_CREAT, 0777);
 	free(msgFDName);
 
 	char * msgSizeFD = getMessageSizeFDName(name);
@@ -360,18 +391,14 @@ struct MPIController * createChildInstance(char * name) {
 
 // Sends a message.
 // Can be called on either a child or controller, doesn't matter.
-// Message must be initialized with mallocShared, otherwise a segfault
-// will result when the peer tries to read it.
+// Internally the function will allocate some shared memory and 
+// copy the message to it before triggering a semaphore. The caller
+// it responsible for deallocating the message that they pass in.
 void sendMessage(struct MPIController * instance, void * message, int length, int type) {
 	// We need to generate a name for the file that the 
 	// message memory will be associated with.
 
-	char * fileName = malloc(sizeof(char) * 128);
-	memset(fileName, 0, sizeof(char) * 128);
-	sprintf(fileName, "/f_%d%d%d", (int)rand(), (int)rand(), (int)rand());
-
-	void * sharedMessage = mallocShared(length, fileName);
-	strcpy(instance->messageFDName, fileName);
+	void * sharedMessage = reallocShared(length, instance->fd);
 	memcpy(sharedMessage, message, length);
 
 	*instance->messageSize   = length;
@@ -388,11 +415,13 @@ void sendMessage(struct MPIController * instance, void * message, int length, in
 	// Now we free the memory.
 	// By this point the receiver will already
 	// have it copied to non-shared memory.
-	shm_unlink(fileName);
-	free(fileName);
+	// shm_unlink(fileName);
 	munmap(sharedMessage, length);
 }
 
+// Halts until revceiving a message. When a message is received, it 
+// will be copied from shared memory into local memory. The returned
+// pointer is the responsibility of the caller to free.
 void * recvMessage(struct MPIController * instance, int * length, int * type) {
 	// wait for a message to come in
 	if (instance->is_controller) {
@@ -406,7 +435,7 @@ void * recvMessage(struct MPIController * instance, int * length, int * type) {
 
 	// Now we need to map the new data coming in
 	// so that it can be accesed.
-	void * msg = mallocShared(*length, instance->messageFDName);
+	void * msg = reallocShared(*length, instance->fd);
 
 	// Allocate some process memory for it and copy it into
 	// the new memory.
@@ -419,9 +448,16 @@ void * recvMessage(struct MPIController * instance, int * length, int * type) {
 		sem_post(instance->childReceived);
 	}
 
+	munmap(msg, *length);
+
 	return result;
 }
 
+// Removes all semaphores, frees shared memory and 
+// unlinks shared memory file descriptors. Call this in
+// the controller program before it exits. Do not call
+// in the child program. More than one call might cause
+// a problem.
 void destroyInstance(struct MPIController * instance) {
 	// remove all of the semaphores from the system
 	char * conSentName = malloc(sizeof(char) * 128);
@@ -466,11 +502,9 @@ void destroyInstance(struct MPIController * instance) {
 	free(msgTypeFD);
 
 	// deallocate the shared memory and the instance itself
-	munmap(instance->messageFDName, sizeof(char) * 128);
 	munmap(instance->messageSize, sizeof(int));
 	munmap(instance->messageType, sizeof(int));
 
 	free(instance);
-
 }
 

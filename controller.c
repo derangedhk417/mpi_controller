@@ -21,18 +21,34 @@
 #include "mpi_controller.h"
 #include <stdio.h>
 #include <unistd.h>
+#include <time.h>
+
+#define MSG_COUNT 1000000
+#define MSG_LENGTH 2048
 
 
 int main(int argc, char ** argv) {
-	struct MPIController * inst = createControllerInstance("test_controller", "-n 4 ./primary_slave");
+	struct MPIController * inst = createControllerInstance("test_controller", "-n 4 ./primary_slave.o");
 
-	char * message = malloc(sizeof(char) * 100);
-	memset(message, 0, sizeof(char) * 100);
-	strcpy(message, "Hello Child");
+	printf("Controller Process Started\n");
+	printf("Beginning Benchmark\n");
 
-	printf("[PARENT] Sending message: %s\n", message);
+	char * message = malloc(sizeof(char) * MSG_LENGTH);
+	memset(message, 1, sizeof(char) * MSG_LENGTH);
 
-	sendMessage(inst, message, sizeof(char) * 100, MSG_TYPE_STRING);
+
+	time_t start = time(NULL);
+	for (int i = 0; i < MSG_COUNT; ++i) {
+		sendMessage(inst, message, sizeof(char) * MSG_LENGTH, MSG_TYPE_STRING);
+	}
+	time_t end = time(NULL);
+
+	printf("Summary:\n");
+	printf("\tSent %d messages of length %d in %ld seconds\n", MSG_COUNT, MSG_LENGTH, end - start);
+	printf("\tData transfer rate: %f Mb/Sec\n", ((MSG_COUNT * 2.0) / (float)(end - start)) / 1000.0);
+	printf("\tCall rate: %f calls/Sec\n", MSG_COUNT / (float)(end - start));
+	printf("\tCall Latency: %f ms\n", 1000.0 / (MSG_COUNT / (float)(end - start)));
+	
 
 	sleep(5);
 

@@ -21,6 +21,8 @@
 #include <mpi.h>
 #include <stdio.h>
 
+#define MSG_COUNT 1000000
+
 int main(int argc, char ** argv) {
 	MPI_Init(NULL, NULL);
 
@@ -37,12 +39,19 @@ int main(int argc, char ** argv) {
 	if (world_rank == 0) {
 		struct MPIController * inst = createChildInstance("test_controller");
 
+		// We need to receive messages in a loop so that the controller
+		// can run it's benchmark.
+
 		int length;
 		int type;
 		char * message;
-		message = recvMessage(inst, &length, &type);
-
-		printf("[CHILD] Message Received, Message Length: %d, Type: %d, Text: %s\n", length, type, message);
+		for (int i = 0; i < MSG_COUNT; ++i) {
+			message = recvMessage(inst, &length, &type);
+			free(message); // We will use up a lot of memory if we don't
+			               // deallocate this.
+		}
+		
+		printf("Child finished receiving messages.\n");
 	}
 
 	MPI_Finalize();
