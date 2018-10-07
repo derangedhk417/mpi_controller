@@ -42,11 +42,12 @@ int main(int argc, char ** argv) {
 		// We need to receive messages in a loop so that the controller
 		// can run it's benchmark.
 
+		int code;
 		int length;
 		int type;
 		char * message;
 		for (int i = 0; i < MSG_COUNT; ++i) {
-			message = recvMessage(inst, &length, &type);
+			message = recvMessage(inst, &code, &length, &type);
 			free(message); // We will use up a lot of memory if we don't
 			               // deallocate this.
 		}

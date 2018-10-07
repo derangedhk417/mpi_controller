@@ -63,11 +63,14 @@ struct MPIController {
 
 	int fd;               
 
-	int  *  messageSize;   // This is populated with the size of the message 
-	                       // everytime a message is passed.
-	int  *  messageType;   // This is populated with the message type every
-	                       // time a message is passed. See the #define 
-	                       // statements at the top of the file.
+	int * messageCode; // Stores the number used to identify the type
+	                   // of message being sent. Meaning is used defined.
+
+	int * messageSize; // This is populated with the size of the message 
+	                   // everytime a message is passed.
+	int * messageType; // This is populated with the message type every
+	                   // time a message is passed. See the #define 
+	                   // statements at the top of the file.
 };
 
 // This function allocates shared memory of the specified
@@ -161,6 +164,19 @@ char * getMessageSizeFDName(char * base) {
 	strcat(sizeFDName, "/");
 	strcat(sizeFDName, base);
 	strcat(sizeFDName, "_fd_message_size");
+	return sizeFDName;
+}
+
+// Constructs the name that should be used to identify
+// the file descriptor for the shared memory used as
+// a location for message size indicators being passes
+// between processes.
+char * getMessageCodeFDName(char * base) {
+	char * sizeFDName = malloc(sizeof(char) * 128);
+	memset(sizeFDName, 0, sizeof(char) * 128);
+	strcat(sizeFDName, "/");
+	strcat(sizeFDName, base);
+	strcat(sizeFDName, "_fd_message_code");
 	return sizeFDName;
 }
 
@@ -268,6 +284,10 @@ struct MPIController * createControllerInstance(char * name, char * MPIArguments
 	instance->fd = shm_open(msgFDName, O_RDWR | O_CREAT, 0777);
 	free(msgFDName);
 
+	char * msgCodeFD = getMessageCodeFDName(name);
+	instance->messageCode = mallocShared(sizeof(int), msgCodeFD);
+	free(msgCodeFD);
+
 	char * msgSizeFD = getMessageSizeFDName(name);
 	instance->messageSize = mallocShared(sizeof(int), msgSizeFD);
 	free(msgSizeFD);
@@ -372,6 +392,10 @@ struct MPIController * createChildInstance(char * name) {
 	instance->fd = shm_open(msgFDName, O_RDWR | O_CREAT, 0777);
 	free(msgFDName);
 
+	char * msgCodeFD = getMessageCodeFDName(name);
+	instance->messageCode = mallocShared(sizeof(int), msgCodeFD);
+	free(msgCodeFD);
+
 	char * msgSizeFD = getMessageSizeFDName(name);
 	instance->messageSize = mallocShared(sizeof(int), msgSizeFD);
 	free(msgSizeFD);
@@ -394,15 +418,16 @@ struct MPIController * createChildInstance(char * name) {
 // Internally the function will allocate some shared memory and 
 // copy the message to it before triggering a semaphore. The caller
 // it responsible for deallocating the message that they pass in.
-void sendMessage(struct MPIController * instance, void * message, int length, int type) {
+void sendMessage(struct MPIController * instance, void * message, int code, int length, int type) {
 	// We need to generate a name for the file that the 
 	// message memory will be associated with.
 
 	void * sharedMessage = reallocShared(length, instance->fd);
 	memcpy(sharedMessage, message, length);
 
-	*instance->messageSize   = length;
-	*instance->messageType   = type;
+	*instance->messageCode = code;
+	*instance->messageSize = length;
+	*instance->messageType = type;
 
 	if (instance->is_controller) {
 		sem_post(instance->controllerSent);
@@ -422,7 +447,7 @@ void sendMessage(struct MPIController * instance, void * message, int length, in
 // Halts until revceiving a message. When a message is received, it 
 // will be copied from shared memory into local memory. The returned
 // pointer is the responsibility of the caller to free.
-void * recvMessage(struct MPIController * instance, int * length, int * type) {
+void * recvMessage(struct MPIController * instance, int * code, int * length, int * type) {
 	// wait for a message to come in
 	if (instance->is_controller) {
 		sem_wait(instance->childSent);
@@ -430,6 +455,7 @@ void * recvMessage(struct MPIController * instance, int * length, int * type) {
 		sem_wait(instance->controllerSent);
 	}
 
+	*code   = *instance->messageCode;
 	*length = *instance->messageSize;
 	*type   = *instance->messageType;
 
@@ -493,6 +519,10 @@ void destroyInstance(struct MPIController * instance) {
 	shm_unlink(msgFDName);
 	free(msgFDName);
 
+	char * msgCodeFD = getMessageCodeFDName(instance->system_name);
+	shm_unlink(msgCodeFD);
+	free(msgCodeFD);
+
 	char * msgSizeFD = getMessageSizeFDName(instance->system_name);
 	shm_unlink(msgSizeFD);
 	free(msgSizeFD);
@@ -502,6 +532,7 @@ void destroyInstance(struct MPIController * instance) {
 	free(msgTypeFD);
 
 	// deallocate the shared memory and the instance itself
+	munmap(instance->messageCode, sizeof(int));
 	munmap(instance->messageSize, sizeof(int));
 	munmap(instance->messageType, sizeof(int));
 

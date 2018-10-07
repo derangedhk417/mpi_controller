@@ -39,7 +39,7 @@ int main(int argc, char ** argv) {
 
 	time_t start = time(NULL);
 	for (int i = 0; i < MSG_COUNT; ++i) {
-		sendMessage(inst, message, sizeof(char) * MSG_LENGTH, MSG_TYPE_STRING);
+		sendMessage(inst, message, 0, sizeof(char) * MSG_LENGTH, MSG_TYPE_STRING);
 	}
 	time_t end = time(NULL);
 
