@@ -39,6 +39,9 @@ int main() {
 ...
 
 int main() {
+  ...
+  // MPI initialization code here
+  ...
   if (world_rank == 0) {
     struct MPIController * inst = createChildInstance("test_controller");
 
