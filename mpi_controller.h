@@ -307,6 +307,7 @@ struct MPIController * createControllerInstance(char * name, char * MPIArguments
 	// We need to add the stringified address of the shared
 	// memory as the last argument
 	char * argString = malloc(sizeof(char) * 2048);
+	memset(argString, 0, sizeof(char) * 2048);
 	strcat(argString, "mpiexec ");
 	strcat(argString, MPIArguments);
 	strcat(argString, " &"); // Necessary for it to run asynchronously.
